@@ -40,10 +40,12 @@ import Control.Monad.IO.Class
 import qualified Data.ByteString as B
 import Data.ByteString.Base64
 import qualified Data.ByteString.Char8 as BC
+import Data.List (inits)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Set (Set)
 import Data.Semigroup
+import Data.Time (UTCTime(..), fromGregorian)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Development.Shake
@@ -285,7 +287,7 @@ commandRules = addPersistent $ \cmdQ@(CommandQ (Command progs inps') outs) -> do
         mapM_ (createParentIfMissing . (dir </>)) outs
         liftIO $ mapM_ (\f -> renameAndFreezeFile (tmp </> f) (dir </> f)) outs
         -- Clean up the temp directory, but only if the above commands succeeded.
-        liftIO $ removeDirectoryRecursive tmp
+        -- liftIO $ removeDirectoryRecursive tmp
         return h
 
 stdoutPath :: FilePath
@@ -319,6 +321,7 @@ renameAndFreezeFile :: FilePath -> FilePath -> IO ()
 renameAndFreezeFile src dest = do
     let freeze f = getPermissions f >>= setPermissions f . setOwnerWritable False
     forFileRecursive_ freeze src
+    resetPathTime src
     renamePath src dest
 
 -- TODO: don't loop on symlinks, and be more efficient?
@@ -354,18 +357,26 @@ linkArtifact destDir a = do
     let localPath = destDir </> relPath a
     createParentIfMissing localPath
     loop realPath localPath
+    forM_ (Prelude.init $ tail $ inits $ splitDirectories $ relPath a)
+        $ \f -> resetPathTime $ destDir </> joinPath f
   where
     loop realPath localPath = do
         isFile <- Directory.doesFileExist realPath
         isDir <- Directory.doesDirectoryExist realPath
-        if | isFile -> createSymbolicLink realPath localPath
+        if | isFile -> do
+                createSymbolicLink realPath localPath
            | isDir -> do
                         createDirectoryIfMissing False localPath
                         getUsefulContents realPath
                             >>= mapM_ (\f -> loop (realPath </> f)
                                       (localPath </> f))
+                        resetPathTime localPath
            | otherwise -> error $ "linkArtifact: source does not exist: " ++ realPath
 
+resetPathTime :: FilePath -> IO ()
+resetPathTime f = Directory.setModificationTime f zeroTime
+  where
+    zeroTime = UTCTime (fromGregorian 1980 0 0) 0
 
 -- TODO: use permissions and/or sandboxing to make this more robust
 artifactRealPath :: Artifact -> FilePath
