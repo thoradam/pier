@@ -4,6 +4,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeOperators #-}
 module Development.Stake.Command
@@ -327,8 +328,12 @@ forFileRecursive_ act f = do
     if not isDir
         then act f
         else do
-            fs <- filter (not . specialFile) <$> Directory.getDirectoryContents f
+            fs <- getUsefulContents f
             mapM_ (forFileRecursive_ act) $ map (f </>) fs
+
+getUsefulContents :: FilePath -> IO [FilePath]
+getUsefulContents f
+    = filter (not . specialFile) <$> Directory.getDirectoryContents f
   where
     specialFile "." = True
     specialFile ".." = True
@@ -341,20 +346,25 @@ forFileRecursive_ act f = do
 -- building "lens" (not including downloads).
 linkArtifact :: FilePath -> Artifact -> IO ()
 linkArtifact _ (Artifact External f)
+    -- TODO: make sure it's a file, not a directory
     | isAbsolute f = return ()
-linkArtifact dir a = do
+linkArtifact destDir a = do
     curDir <- getCurrentDirectory
     let realPath = curDir </> artifactRealPath a
-    let localPath = dir </> relPath a
-    checkExists realPath
+    let localPath = destDir </> relPath a
     createParentIfMissing localPath
-    createSymbolicLink realPath localPath
+    loop realPath localPath
   where
-    -- Sanity check
-    checkExists f = do
-        isFile <- Directory.doesFileExist f
-        isDir <- Directory.doesDirectoryExist f
-        when (not isFile && not isDir) $ error $ "linkArtifact: source does not exist: " ++ show f
+    loop realPath localPath = do
+        isFile <- Directory.doesFileExist realPath
+        isDir <- Directory.doesDirectoryExist realPath
+        if | isFile -> createSymbolicLink realPath localPath
+           | isDir -> do
+                        createDirectoryIfMissing False localPath
+                        getUsefulContents realPath
+                            >>= mapM_ (\f -> loop (realPath </> f)
+                                      (localPath </> f))
+           | otherwise -> error $ "linkArtifact: source does not exist: " ++ realPath
 
 
 -- TODO: use permissions and/or sandboxing to make this more robust
