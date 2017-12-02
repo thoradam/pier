@@ -73,6 +73,17 @@ askBuiltPackages yaml pkgs = do
 
 data BuiltDeps = BuiltDeps [PackageIdentifier] TransitiveDeps
 
+builtDep :: BuiltPackage -> BuiltDeps
+builtDep p = BuiltDeps [builtPackageId p] (builtPackageTrans p)
+
+instance Monoid BuiltDeps where
+    mempty = BuiltDeps [] mempty
+    BuiltDeps ps ds `mappend` BuiltDeps ps' ds'
+        = BuiltDeps (ps <> ps') (ds <> ds')
+
+instance Semigroup BuiltDeps
+    
+
 askBuiltDeps
     :: StackYaml
     -> [PackageName]
@@ -119,19 +130,52 @@ buildResolved stackYaml conf (Local dir) =
 buildPackageInDir :: StackYaml -> Config -> Artifact -> Action BuiltPackage
 buildPackageInDir stackYaml conf packageSourceDir = do
     (desc, dir') <- configurePackage (plan conf) packageSourceDir
-    buildFromDesc stackYaml conf dir' desc
+    lib <- buildLibFromDesc stackYaml conf dir' desc
+    -- TODO: less hacky way to do this?
+    putNormal $ "Building binaries..."
+    putNormal $ show desc
+    mapM_ (buildExeFromDesc stackYaml conf dir' desc lib)
+        $ filter (buildable . buildInfo) $ executables desc
+    case lib of
+        Nothing -> error "buildFromDesc: no library"
+        Just l -> return $ l
+    
 
-buildFromDesc
-    :: StackYaml -> Config -> Artifact -> PackageDescription -> Action BuiltPackage
-buildFromDesc stackYaml conf packageSourceDir desc
+buildLibFromDesc
+    :: StackYaml -> Config -> Artifact -> PackageDescription -> Action (Maybe BuiltPackage)
+buildLibFromDesc stackYaml conf packageSourceDir desc
     | Just lib <- library desc
     , let lbi = libBuildInfo lib
-    , buildable lbi = do
+    , buildable lbi = Just <$> do
+            -- TODO: sanity-check depenency version ranges
             let depNames = [n | Dependency n _ <- targetBuildDepends
                                                 lbi]
             deps <- askBuiltDeps stackYaml depNames
             buildLibrary conf deps packageSourceDir desc lib
-    | otherwise = error "buildFromDesc: no library"
+    | otherwise = return Nothing
+
+buildExeFromDesc
+    :: StackYaml -> Config -> Artifact -> PackageDescription -> Maybe BuiltPackage
+    -> Executable -> Action () -- TODO: return *something*
+buildExeFromDesc stackYaml conf packageSourceDir desc builtLib exe = do
+    putNormal $ "Building " ++ display (package desc) ++ ":" ++ exeName exe
+    let bi = buildInfo exe
+    let pkgDir = (packageSourceDir />)
+    let outPath = "bin" </> exeName exe
+    -- TODO: actually check whether the lib is declared as a dep
+    let withLib = case builtLib of
+                    Nothing -> mempty
+                    Just l -> builtDep l
+    deps <- (withLib <>)
+                <$> askBuiltDeps stackYaml
+                        [n | Dependency n _ <- targetBuildDepends bi
+                           , n /= packageName desc]
+    -- TODO: search modulePath
+    let args = ["-o", outPath]
+    runGhc (configGhc conf) deps desc (buildInfo exe) packageSourceDir
+        args (Left (modulePath exe) : Right (fromString $ "Paths_" ++ display (packageName desc))
+                        : map Right (otherModules bi)) (output outPath)
+    return ()
 
 buildLibrary
     :: Config
@@ -167,7 +211,7 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
             else fmap (first Just)
                     $ runGhc (configGhc conf) deps desc lbi packageSourceDir
                             args
-                            (otherModules lbi ++ exposedModules lib)
+                            (map Right $ otherModules lbi ++ exposedModules lib)
                             compileOut
     spec <- writeArtifact (pkgPrefixDir </> "spec") $ unlines $
         [ "name: " ++ display (packageName (package desc))
@@ -209,7 +253,7 @@ runGhc
     -> BuildInfo
     -> Artifact -- ^ package directory
     -> [String]  -- ^ other args to GHC
-    -> [ModuleName]
+    -> [Either FilePath ModuleName]
     -> Output a
     -> Action a
 runGhc ghc (BuiltDeps depPkgs transDeps) desc bi packageSourceDir extraArgs
@@ -281,9 +325,11 @@ findModule
     -> BuildInfo
     -> Set Artifact -- ^ Transitive C include dirs
     -> [Artifact]             -- Source directory to check
-    -> ModuleName
+    -> Either FilePath ModuleName
     -> Action Artifact
-findModule ghc desc bi cIncludeDirs paths m = do
+-- TODO:
+findModule ghc desc bi cIncludeDirs paths (Left f) = return $ head paths /> f
+findModule ghc desc bi cIncludeDirs paths (Right m) = do
     found <- runMaybeT $ genPathsModule m (package desc) <|>
                 msum (map (search ghc bi cIncludeDirs m) paths)
     case found of

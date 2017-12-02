@@ -5,6 +5,7 @@ module Development.Stake.Package
     , parseCabalFileInDir
     ) where
 
+import Control.Arrow (second)
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.HashMap.Strict as HM
 import Data.Semigroup
@@ -93,7 +94,9 @@ flattenToDefaultFlags plan gdesc = let
                         ]
     in desc0 {
         -- TODO: Nothing vs Nothing?
-        library = fmap (resolve plan flags) $ condLibrary gdesc
+        library = fmap (resolve plan flags) $ condLibrary gdesc,
+        executables = map (\(n,e) -> (resolve plan flags e) { exeName = n })
+                        $ condExecutables gdesc
        }
 
 resolve
