@@ -133,7 +133,6 @@ buildPackageInDir stackYaml conf packageSourceDir = do
     lib <- buildLibFromDesc stackYaml conf dir' desc
     -- TODO: less hacky way to do this?
     putNormal $ "Building binaries..."
-    putNormal $ show desc
     mapM_ (buildExeFromDesc stackYaml conf dir' desc lib)
         $ filter (buildable . buildInfo) $ executables desc
     case lib of
@@ -191,8 +190,9 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
     let hiDir = pkgPrefixDir </> "hi"
     let oDir = pkgPrefixDir </> "o"
     let libName = "HS" ++ display (packageName $ package desc)
-    let libFile = pkgPrefixDir </> "lib" ++ libName ++ "-ghc"
-                                ++ display (ghcVersion $ plan conf) <.> dynExt
+    let libFile = pkgPrefixDir </> "lib" ++ libName
+                                <.> "a"
+                                -- ++ "-ghc" ++ display (ghcVersion $ plan conf) <.> dynExt
     -- TODO: Actual LTS version ghc.
     let shouldBuildLib = not $ null $ exposedModules lib
     let compileOut = liftA2 (\linked hi -> (linked, Set.fromList [linked,hi]))
@@ -202,17 +202,28 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
             [ "-this-unit-id", display $ package desc
             , "-hidir", hiDir
             , "-odir", oDir
-            , "-shared"
-            , "-fPIC"
-            , "-o", libFile
             ]
+    let modules = otherModules lbi ++ exposedModules lib
     (maybeLinked, libFiles)  <- if not shouldBuildLib
             then return (Nothing, Set.empty)
-            else fmap (first Just)
-                    $ runGhc (configGhc conf) deps desc lbi packageSourceDir
-                            args
-                            (map Right $ otherModules lbi ++ exposedModules lib)
-                            compileOut
+            else do
+                    (hiDir', oDir') <- runGhc 
+                        (configGhc conf) deps desc lbi packageSourceDir
+                        args
+                        (map Right modules)
+                        (liftA2 (,) (output hiDir) (output oDir))
+                    let objs = map (\m -> oDir' /> (toFilePath m <.> "o")) modules
+                                -- TODO: this is pretty janky...
+                                ++ map (\f -> replaceArtifactExtension
+                                                    (oDir'/> relPath (pkgDir f)) "o")
+                                        (cSources lbi)
+                                
+                    libArchive <- runCommand (output libFile)
+                                    $ input oDir'
+                                    <> inputList objs
+                                    <> prog "ar" (["-cqv", libFile]
+                                                    ++ map relPath objs)
+                    return (Just libArchive, Set.fromList [libArchive, hiDir'])
     spec <- writeArtifact (pkgPrefixDir </> "spec") $ unlines $
         [ "name: " ++ display (packageName (package desc))
         , "version: " ++ display (packageVersion (package desc))
@@ -282,18 +293,11 @@ runGhc ghc (BuiltDeps depPkgs transDeps) desc bi packageSourceDir extraArgs
     args =
         [ "-ddump-to-file"
         , "-v0"
-        , "-dynamic"
         , "-i"
         ]
         ++
         -- Necessary for boot files:
         ["-i" ++ relPath d | d <- sourceDirs]
-        ++
-        -- TODO: allow static linking
-        [ "-dynamic"
-        , "-hisuf", "dyn_hi"
-        , "-osuf", "dyn_o"
-        ]
         ++
         concat (map (\p -> ["-package-db", relPath p])
                 $ Set.toList $ transitiveDBs transDeps)
