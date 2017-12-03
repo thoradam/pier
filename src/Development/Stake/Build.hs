@@ -7,17 +7,16 @@ module Development.Stake.Build
     where
 
 import Control.Applicative (liftA2, (<|>))
-import Control.Monad (filterM, guard, msum)
+import Control.Monad (filterM, guard, msum, void)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Maybe
-import Data.Bifunctor (first)
 import Data.List (nub)
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Semigroup
 import GHC.Generics hiding (packageName)
 import Development.Shake
 import Development.Shake.Classes
-import Development.Shake.FilePath
+import Development.Shake.FilePath hiding (exe)
 import Development.Stake.Command
 import Development.Stake.Config
 import Development.Stake.Core
@@ -156,22 +155,20 @@ buildExeFromDesc
 buildExeFromDesc stackYaml conf packageSourceDir desc builtLib exe = do
     putNormal $ "Building " ++ display (package desc) ++ ":" ++ exeName exe
     let bi = buildInfo exe
-    let pkgDir = (packageSourceDir />)
     let outPath = "bin" </> exeName exe
     -- TODO: actually check whether the lib is declared as a dep
-    let withLib = case builtLib of
+    let lib = case builtLib of
                     Nothing -> mempty
                     Just l -> builtDep l
-    deps <- (withLib <>)
+    deps <- (lib <>)
                 <$> askBuiltDeps stackYaml
                         [n | Dependency n _ <- targetBuildDepends bi
                            , n /= packageName desc]
     -- TODO: search modulePath
     let args = ["-o", outPath]
-    runGhc (configGhc conf) deps desc (buildInfo exe) packageSourceDir
+    void $ runGhc (configGhc conf) deps desc (buildInfo exe) packageSourceDir
         args (Left (modulePath exe) : Right (fromString $ "Paths_" ++ display (packageName desc))
                         : map Right (otherModules bi)) (output outPath)
-    return ()
 
 buildLibrary
     :: Config
@@ -193,9 +190,6 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
                                 ++ "-ghc" ++ display (ghcVersion $ plan conf) <.> dynExt
     -- TODO: Actual LTS version ghc.
     let shouldBuildLib = not $ null $ exposedModules lib
-    let compileOut = liftA2 (\linked hi -> (linked, Set.fromList [linked,hi]))
-                        (output libFile)
-                        (output hiDir)
     let args =
             [ "-this-unit-id", display $ package desc
             , "-hidir", hiDir
@@ -345,7 +339,7 @@ findModule
     -> Either FilePath ModuleName
     -> Action Artifact
 -- TODO:
-findModule ghc desc bi cIncludeDirs paths (Left f) = return $ head paths /> f
+findModule _   _ _ _ paths (Left f) = return $ head paths /> f
 findModule ghc desc bi cIncludeDirs paths (Right m) = do
     found <- runMaybeT $ genPathsModule m (package desc) <|>
                 msum (map (search ghc bi cIncludeDirs m) paths)

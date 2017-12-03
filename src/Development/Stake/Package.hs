@@ -5,7 +5,6 @@ module Development.Stake.Package
     , parseCabalFileInDir
     ) where
 
-import Control.Arrow (second)
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.HashMap.Strict as HM
 import Data.Semigroup
