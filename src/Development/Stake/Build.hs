@@ -87,7 +87,10 @@ askBuiltDeps
     -> [PackageName]
     -> Action BuiltDeps
 askBuiltDeps stackYaml pkgs = do
-    deps <- askBuiltPackages stackYaml pkgs
+    -- TODO: more efficient than nub
+    -- (It's possible for Cabal packages to specify duplicate deps, if for
+    -- example they're setting different version bounds.)
+    deps <- askBuiltPackages stackYaml $ nub pkgs
     return $ BuiltDeps (map builtPackageId deps)
                   (foldMap builtPackageTrans deps)
 
@@ -244,6 +247,7 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
         , "id: " ++ display (package desc)
         , "key: " ++ display (package desc)
         , "extra-libraries: " ++ unwords (extraLibs lbi)
+        , "depends: " ++ unwords (map display depPkgs)
         ]
         ++ case maybeLinked of
             Nothing -> []
@@ -259,10 +263,15 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
         in runCommand (output relPkgDb)
                 $ ghcPkgProg ghc ["init", relPkgDb]
                     <> ghcPkgProg ghc
-                            ["-v0", "--package-db", relPkgDb, "register",
-                                   relPath spec]
+                            (["-v0"]
+                            ++ [ "--package-db=" ++ relPath f
+                               | f <-  Set.toList $ transitiveDBs transDeps
+                               ]
+                            ++ ["--package-db", relPkgDb, "register",
+                                       relPath spec])
                     <> input spec
                     <> inputs libFiles
+                    <> inputs (transitiveDBs transDeps)
     return $ BuiltPackage (package desc)
             $ transDeps <> TransitiveDeps
                 { transitiveDBs = Set.singleton pkgDb'
