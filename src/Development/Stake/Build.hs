@@ -82,7 +82,6 @@ instance Monoid BuiltDeps where
         = BuiltDeps (ps <> ps') (ds <> ds')
 
 instance Semigroup BuiltDeps
-    
 
 askBuiltDeps
     :: StackYaml
@@ -131,14 +130,12 @@ buildPackageInDir :: StackYaml -> Config -> Artifact -> Action BuiltPackage
 buildPackageInDir stackYaml conf packageSourceDir = do
     (desc, dir') <- configurePackage (plan conf) packageSourceDir
     lib <- buildLibFromDesc stackYaml conf dir' desc
-    -- TODO: less hacky way to do this?
-    putNormal $ "Building binaries..."
     mapM_ (buildExeFromDesc stackYaml conf dir' desc lib)
         $ filter (buildable . buildInfo) $ executables desc
     case lib of
         Nothing -> error "buildFromDesc: no library"
         Just l -> return $ l
-    
+
 
 buildLibFromDesc
     :: StackYaml -> Config -> Artifact -> PackageDescription -> Action (Maybe BuiltPackage)
@@ -192,7 +189,8 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
     let libName = "HS" ++ display (packageName $ package desc)
     let libFile = pkgPrefixDir </> "lib" ++ libName
                                 <.> "a"
-                                -- ++ "-ghc" ++ display (ghcVersion $ plan conf) <.> dynExt
+    let dynLibFile = pkgPrefixDir </> "lib" ++ libName
+                                ++ "-ghc" ++ display (ghcVersion $ plan conf) <.> dynExt
     -- TODO: Actual LTS version ghc.
     let shouldBuildLib = not $ null $ exposedModules lib
     let compileOut = liftA2 (\linked hi -> (linked, Set.fromList [linked,hi]))
@@ -202,12 +200,14 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
             [ "-this-unit-id", display $ package desc
             , "-hidir", hiDir
             , "-odir", oDir
+            , "-dynamic-too"
+            , "-fPIC"
             ]
     let modules = otherModules lbi ++ exposedModules lib
     (maybeLinked, libFiles)  <- if not shouldBuildLib
             then return (Nothing, Set.empty)
             else do
-                    (hiDir', oDir') <- runGhc 
+                    (hiDir', oDir') <- runGhc
                         (configGhc conf) deps desc lbi packageSourceDir
                         args
                         (map Right modules)
@@ -217,13 +217,26 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
                                 ++ map (\f -> replaceArtifactExtension
                                                     (oDir'/> relPath (pkgDir f)) "o")
                                         (cSources lbi)
-                                
                     libArchive <- runCommand (output libFile)
                                     $ input oDir'
-                                    <> inputList objs
                                     <> prog "ar" (["-cqv", libFile]
                                                     ++ map relPath objs)
-                    return (Just libArchive, Set.fromList [libArchive, hiDir'])
+                    let dynObjs = map (\m -> oDir' /> (toFilePath m <.> "dyn_o")) modules
+                    let cSrc = map pkgDir $ cSources lbi
+                    cFiles <- collectCFiles desc lbi pkgDir
+                    dynLib <- runCommand (output dynLibFile)
+                                $ input oDir'
+                                <> ghcProg ghc (["-shared", "-fPIC", "-dynamic", "-o", dynLibFile]
+                                                    ++ map relPath (dynObjs ++ cSrc)
+                                            ++ map ("-I"++) (map (relPath . pkgDir) $ includeDirs lbi)
+                                            ++ concatMap (\p -> ["-package-db", relPath p])
+                                                    (Set.toList $ transitiveDBs transDeps)
+                                            ++
+                                            concat [["-package", display d] | d <- depPkgs]
+                                            )
+                                <> inputList cSrc <> inputList cFiles
+                                <> inputs (transitiveDBs transDeps <> transitiveLibFiles transDeps)
+                    return (Just libArchive, Set.fromList [libArchive, dynLib, hiDir'])
     spec <- writeArtifact (pkgPrefixDir </> "spec") $ unlines $
         [ "name: " ++ display (packageName (package desc))
         , "version: " ++ display (packageVersion (package desc))
