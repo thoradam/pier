@@ -167,8 +167,13 @@ buildExeFromDesc stackYaml conf packageSourceDir desc builtLib exe = do
     -- TODO: search modulePath
     let args = ["-o", outPath]
     void $ runGhc (configGhc conf) deps desc (buildInfo exe) packageSourceDir
-        args (Left (modulePath exe) : Right (fromString $ "Paths_" ++ display (packageName desc))
-                        : map Right (otherModules bi)) (output outPath)
+        args (Left (modulePath exe)
+                    : map Right (addPathsMod $ otherModules bi)) (output outPath)
+  where
+    pathsMod = fromString $ "Paths_" ++ display (packageName desc)
+    addPathsMod ms
+        | pathsMod `elem` ms = ms
+        | otherwise = pathsMod : ms
 
 buildLibrary
     :: Config
@@ -266,7 +271,7 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
                 , transitiveIncludeDirs = Set.empty
                 }
 
-arParams :: [String]
+arParams :: String
 arParams = case buildOS of
                 OSX -> "-cqv"
                 _ -> "-rcs"
