@@ -295,7 +295,9 @@ runGhc ghc (BuiltDeps depPkgs transDeps) desc bi packageSourceDir extraArgs
     let inputFiles = moduleFiles ++ moduleBootFiles ++ cInputs
     runCommand out
         $ ghcProg ghc (args
-                        ++ map relPath moduleFiles
+                        -- TODO: just look for redundancy between exe's modulePath ("main-is")
+                        -- and those in otherModules
+                        ++ nub (map relPath moduleFiles)
                         ++ map (relPath . pkgDir) (cSources bi))
         <> inputList inputFiles
         <> inputs (transitiveDBs transDeps)
