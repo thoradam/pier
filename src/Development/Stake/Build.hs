@@ -213,7 +213,7 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
                                         (cSources lbi)
                     libArchive <- runCommand (output libFile)
                                     $ input oDir'
-                                    <> prog "ar" (["-cqv", libFile]
+                                    <> prog "ar" ([arParams, libFile]
                                                     ++ map relPath objs)
                     let dynObjs = map (\m -> oDir' /> (toFilePath m <.> "dyn_o")) modules
                     let cSrc = map pkgDir $ cSources lbi
@@ -227,6 +227,8 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
                                                     (Set.toList $ transitiveDBs transDeps)
                                             ++
                                             concat [["-package", display d] | d <- depPkgs]
+                                            ++ ["-optc" ++ opt | opt <- ccOptions lbi]
+                                            ++ ["-l" ++ libDep | libDep <- extraLibs lbi]
                                             )
                                 <> inputList cSrc <> inputList cFiles
                                 <> inputs (transitiveDBs transDeps <> transitiveLibFiles transDeps)
@@ -263,6 +265,11 @@ buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
                 -- TODO:
                 , transitiveIncludeDirs = Set.empty
                 }
+
+arParams :: [String]
+arParams = case buildOS of
+                OSX -> "-cqv"
+                _ -> "-rcs"
 
 runGhc
     :: InstalledGhc

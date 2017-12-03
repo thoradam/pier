@@ -240,7 +240,9 @@ commandHash cmdQ = do
 
 runCommand :: Output t -> Command -> Action t
 runCommand (Output outs mk) c
-    = mk <$> askPersistent (CommandQ c outs)
+    = do
+        putLoud $ show c
+        mk <$> askPersistent (CommandQ c outs)
 
 runCommandStdout :: Command -> Action String
 runCommandStdout c = do
@@ -280,12 +282,13 @@ commandRules = addPersistent $ \cmdQ@(CommandQ (Command progs inps') outs) -> do
         -- TODO: more flexibility around the env vars
         -- Also: limit valid parameters for the *prog* binary (rather than taking it
         -- from the PATH that the `stake` executable sees).
-        let run (Prog p as cwd) = do
+        let run pr@(Prog p as cwd) = do
                     -- hack around shake weirdness w.r.t. relative binary paths
                     let p' = case p of
                                 CallEnv s -> s
                                 CallArtifact f -> tmp </> relPath f
                                 CallTemp f -> tmp </> f
+                    putLoud $ show pr
                     quietly $ unStdout
                             <$> command [Cwd $ tmp </> cwd, Env defaultEnv]
                                     p' as
