@@ -378,7 +378,8 @@ search ghc bi cIncludeDirs m srcDir
       genHappy "y" <|>
       genHappy "ly" <|>
       genAlex "x" <|>
-      existing
+      existing "hs" <|>
+      existing "lhs"
   where
     genHappy ext = do
         let yFile = srcDir /> (toFilePath m <.> ext)
@@ -414,7 +415,7 @@ search ghc bi cIncludeDirs m srcDir
                      ["-o", relOutput, relPath xFile]
                <> input xFile
 
-    existing = let f = srcDir /> (toFilePath m <.> "hs")
+    existing ext = let f = srcDir /> (toFilePath m <.> ext)
                  in exists f >> return f
 
 ifNull :: a -> [a] -> [a]
