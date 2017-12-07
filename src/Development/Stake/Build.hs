@@ -184,10 +184,11 @@ buildLibrary
     -> Artifact
     -> PackageDescription -> Library
     -> Action BuiltPackage
-buildLibrary conf deps@(BuiltDeps _ transDeps) packageSourceDir desc lib = do
+buildLibrary conf deps@(BuiltDeps depPkgs transDeps) packageSourceDir desc lib = do
     let ghc = configGhc conf
     putNormal $ "Building " ++ display (package desc)
     let pkgPrefixDir = display (packageName $ package desc)
+    let pkgDir = (packageSourceDir />)
     let lbi = libBuildInfo lib
     let hiDir = pkgPrefixDir </> "hi"
     let oDir = pkgPrefixDir </> "o"
