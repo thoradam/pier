@@ -383,8 +383,7 @@ getExtraSrcFiles pkg
                     . extraSrcFiles
                     $ confdDesc pkg
         return . ExtraSrcFiles $
-            inputList (map (confdSourceDir pkg />) files)
-            <> foldMap (\f -> shadow (confdSourceDir pkg /> f) f)
+            foldMap (\f -> shadow (confdSourceDir pkg /> f) f)
                   files
 
 collectDataFiles
