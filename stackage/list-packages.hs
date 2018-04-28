@@ -1,4 +1,4 @@
--- stack script --resolver lts-10.3 --package pier --package unordered-containers
+-- stack script --resolver lts-11.6 --package pier --package unordered-containers
 module Main (main) where
 
 import Control.Exception (throw)
